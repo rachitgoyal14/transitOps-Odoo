@@ -7,6 +7,7 @@ from app.models.fuel_log import FuelLog
 from app.models.expense import Expense, ExpenseCategory
 from app.models.briefing_cache import BriefingCache
 from app.models.dispatch_suggestion import DispatchSuggestion
+from app.models.depot import Depot
 
 __all__ = [
     "User", "Role",
@@ -18,4 +19,5 @@ __all__ = [
     "Expense", "ExpenseCategory",
     "BriefingCache",
     "DispatchSuggestion",
+    "Depot",
 ]

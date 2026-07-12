@@ -1,7 +1,7 @@
 import uuid
 import enum
 from datetime import datetime, date
-from sqlalchemy import String, Numeric, Date, Enum as SAEnum, DateTime, func
+from sqlalchemy import String, Numeric, Date, Enum as SAEnum, DateTime, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -17,7 +17,7 @@ class DriverStatus(str, enum.Enum):
 class Driver(Base):
     __tablename__ = "drivers"
 
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
     full_name: Mapped[str] = mapped_column(String(100), nullable=False)
     license_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
     license_category: Mapped[str] = mapped_column(String(10), nullable=False)
