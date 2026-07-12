@@ -273,6 +273,12 @@ export async function getAutopilotFeed() {
   return request<AutopilotFeed>('/trips/autopilot/feed');
 }
 
+// ── User Management ─────────────────────────────────────────────────────
+
+export async function createUser(data: { full_name: string; email: string; password: string; role: string }) {
+  return request<User>('/auth/users', { method: 'POST', body: JSON.stringify(data) });
+}
+
 // ── Chat ────────────────────────────────────────────────────────────────
 
 export async function askChat(question: string) {
