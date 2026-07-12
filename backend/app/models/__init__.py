@@ -10,6 +10,7 @@ from app.models.fuel_log import FuelLog
 from app.models.expense import Expense
 from app.models.briefing_cache import BriefingCache
 from app.models.dispatch_suggestion import DispatchSuggestion
+from app.models.depot import Depot
 
 # Expose enums at the package level for teammate's router/service compatibility
 from app.models.enums import (
@@ -38,4 +39,5 @@ __all__ = [
     "ExpenseCategory",
     "BriefingCache",
     "DispatchSuggestion",
+    "Depot",
 ]

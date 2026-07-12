@@ -1,8 +1,8 @@
 from fastapi import Depends, HTTPException, status, Query
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
+from sqlalchemy.future import select
 from jose import JWTError
 import uuid
 
@@ -62,4 +62,3 @@ class PaginationParams:
         self.page_size = page_size
         self.offset = (page - 1) * page_size
         self.limit = page_size
-

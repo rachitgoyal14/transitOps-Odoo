@@ -11,8 +11,8 @@ class Trip(Base):
     __tablename__ = "trips"
 
     id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    vehicle_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("vehicles.id"), nullable=False)
-    driver_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("drivers.id"), nullable=False)
+    vehicle_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("vehicles.id"), nullable=False, index=True)
+    driver_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("drivers.id"), nullable=False, index=True)
     source: Mapped[str] = mapped_column(String(200), nullable=False)
     destination: Mapped[str] = mapped_column(String(200), nullable=False)
     planned_distance_km: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)

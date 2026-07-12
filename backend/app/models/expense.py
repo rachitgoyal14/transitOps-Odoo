@@ -11,7 +11,7 @@ class Expense(Base):
     __tablename__ = "expenses"
 
     id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    vehicle_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("vehicles.id"), nullable=False)
+    vehicle_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("vehicles.id"), nullable=False, index=True)
     trip_id: Mapped[uuid.UUID | None] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("trips.id"), nullable=True)
     category: Mapped[ExpenseCategory] = mapped_column(
         PgEnum(ExpenseCategory, name="expense_category", create_type=False),

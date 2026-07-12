@@ -11,7 +11,7 @@ class Vehicle(Base):
     __tablename__ = "vehicles"
 
     id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    registration_number: Mapped[str] = mapped_column(String(20), unique=True, nullable=False)
+    registration_number: Mapped[str] = mapped_column(String(20), unique=True, nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     type: Mapped[str] = mapped_column(String(50), nullable=False)
     max_load_kg: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
@@ -22,7 +22,7 @@ class Vehicle(Base):
         nullable=False,
         default=VehicleStatus.available
     )
-    region: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    region: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
     lat: Mapped[Decimal | None] = mapped_column(Numeric(9, 6), nullable=True)
     lng: Mapped[Decimal | None] = mapped_column(Numeric(9, 6), nullable=True)
     depot_id: Mapped[uuid.UUID | None] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("depots.id"), nullable=True)

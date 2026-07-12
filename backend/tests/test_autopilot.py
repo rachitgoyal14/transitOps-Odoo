@@ -1,22 +1,129 @@
-import pytest
+from app.api.v1 import autopilot as autopilot_module
+from tests.conftest import auth_header
+
+
+async def _reset_autopilot_state():
+    autopilot_module._autopilot_enabled = False
+    autopilot_module._autopilot_events.clear()
+
+
+# ── POST /api/v1/trips/autopilot/toggle ────────────────────────────────
+
+async def test_toggle_autopilot_enable(client, fleet_manager):
+    await _reset_autopilot_state()
+    resp = await client.post(
+        "/api/v1/trips/autopilot/toggle",
+        json={"enabled": True},
+        headers=auth_header(fleet_manager),
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["enabled"] is True
+    assert "enabled" in data["message"].lower()
+
+
+async def test_toggle_autopilot_disable(client, fleet_manager):
+    await _reset_autopilot_state()
+    resp = await client.post(
+        "/api/v1/trips/autopilot/toggle",
+        json={"enabled": False},
+        headers=auth_header(fleet_manager),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["enabled"] is False
+
+
+async def test_toggle_autopilot_unauthorized(client, safety_officer):
+    await _reset_autopilot_state()
+    resp = await client.post(
+        "/api/v1/trips/autopilot/toggle",
+        json={"enabled": True},
+        headers=auth_header(safety_officer),
+    )
+    assert resp.status_code == 403
+
+
+async def test_toggle_autopilot_no_auth(client):
+    await _reset_autopilot_state()
+    resp = await client.post(
+        "/api/v1/trips/autopilot/toggle",
+        json={"enabled": True},
+    )
+    assert resp.status_code == 401
+
+
+# ── GET /api/v1/trips/autopilot/feed ───────────────────────────────────
+
+async def test_feed_returns_empty_when_disabled(client, fleet_manager):
+    await _reset_autopilot_state()
+    resp = await client.get(
+        "/api/v1/trips/autopilot/feed",
+        headers=auth_header(fleet_manager),
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["autopilot_enabled"] is False
+    assert data["events"] == []
+    assert data["total_dispatched"] == 0
+    assert data["total_escalated"] == 0
+
+
+async def test_feed_returns_empty_when_enabled_no_trips(client, fleet_manager):
+    await _reset_autopilot_state()
+    await client.post(
+        "/api/v1/trips/autopilot/toggle",
+        json={"enabled": True},
+        headers=auth_header(fleet_manager),
+    )
+    resp = await client.get(
+        "/api/v1/trips/autopilot/feed",
+        headers=auth_header(fleet_manager),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["autopilot_enabled"] is True
+
+
+async def test_feed_requires_auth(client):
+    resp = await client.get("/api/v1/trips/autopilot/feed")
+    assert resp.status_code == 401
+
+
+async def test_feed_requires_dispatcher_or_manager(client, safety_officer):
+    resp = await client.get(
+        "/api/v1/trips/autopilot/feed",
+        headers=auth_header(safety_officer),
+    )
+    assert resp.status_code == 403
+
+
+async def test_feed_by_dispatcher(client, dispatcher_user):
+    await _reset_autopilot_state()
+    resp = await client.get(
+        "/api/v1/trips/autopilot/feed",
+        headers=auth_header(dispatcher_user),
+    )
+    assert resp.status_code == 200
+
+
+# ── Functional integration tests ────────────────────────────────────────
+
 import uuid
+import json
 from decimal import Decimal
 from datetime import date, timedelta
-from httpx import AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.future import select
-from sqlalchemy import update, delete
 from unittest.mock import patch
+
+from sqlalchemy import update, delete
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Vehicle, Driver, Trip, Role, User
 from app.models.enums import VehicleStatus, DriverStatus, TripStatus
 from app.core.security import hash_password
+from tests.conftest import _created_ids
 
-@pytest.fixture
-def anyio_backend():
-    return "asyncio"
 
-async def create_user_with_role(db: AsyncSession, client: AsyncClient, role_name: str) -> dict:
+async def _create_user_with_role(db: AsyncSession, client, role_name: str) -> dict:
+    from sqlalchemy.future import select
     role_stmt = select(Role).where(Role.name == role_name)
     role_result = await db.execute(role_stmt)
     role = role_result.scalar_one()
@@ -40,16 +147,38 @@ async def create_user_with_role(db: AsyncSession, client: AsyncClient, role_name
     token = response.json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
 
-@pytest.fixture
-async def fleet_manager_headers(client: AsyncClient, db: AsyncSession) -> dict:
-    return await create_user_with_role(db, client, "fleet_manager")
 
-@pytest.fixture
-async def dispatcher_headers(client: AsyncClient, db: AsyncSession) -> dict:
-    return await create_user_with_role(db, client, "dispatcher")
+async def test_autopilot_toggle_flow(client, fleet_manager, db):
+    headers = await _create_user_with_role(db, client, "fleet_manager")
 
-@pytest.fixture
-async def vehicle(db: AsyncSession) -> Vehicle:
+    res = await client.post(
+        "/api/v1/trips/autopilot/toggle",
+        json={"enabled": True},
+        headers=headers
+    )
+    assert res.status_code == 200
+    assert res.json()["enabled"] is True
+
+    res = await client.get("/api/v1/trips/autopilot/feed", headers=headers)
+    assert res.status_code == 200
+    assert res.json()["autopilot_enabled"] is True
+
+    res = await client.post(
+        "/api/v1/trips/autopilot/toggle",
+        json={"enabled": False},
+        headers=headers
+    )
+    assert res.status_code == 200
+    assert res.json()["enabled"] is False
+
+    res = await client.get("/api/v1/trips/autopilot/feed", headers=headers)
+    assert res.status_code == 200
+    assert res.json()["autopilot_enabled"] is False
+
+
+async def test_autopilot_single_unambiguous_candidate(client, fleet_manager, db):
+    headers = await _create_user_with_role(db, client, "fleet_manager")
+
     veh = Vehicle(
         registration_number=f"REG-{uuid.uuid4().hex[:10].upper()}",
         name="Autopilot Test Vehicle",
@@ -64,10 +193,8 @@ async def vehicle(db: AsyncSession) -> Vehicle:
     db.add(veh)
     await db.commit()
     await db.refresh(veh)
-    return veh
+    _created_ids["vehicles"].append(veh.id)
 
-@pytest.fixture
-async def driver(db: AsyncSession) -> Driver:
     d = Driver(
         full_name="Autopilot Driver",
         license_number=f"DL-{uuid.uuid4().hex[:10].upper()}",
@@ -80,65 +207,22 @@ async def driver(db: AsyncSession) -> Driver:
     db.add(d)
     await db.commit()
     await db.refresh(d)
-    return d
+    _created_ids["drivers"].append(d.id)
 
-@pytest.mark.anyio
-async def test_autopilot_toggle(client: AsyncClient, fleet_manager_headers: dict):
-    # 1. Toggle autopilot on
-    res = await client.post(
-        "/api/v1/trips/autopilot/toggle",
-        json={"enabled": True},
-        headers=fleet_manager_headers
-    )
-    assert res.status_code == 200
-    assert res.json()["enabled"] is True
-
-    # 2. Get feed and verify it is enabled
-    res = await client.get("/api/v1/trips/autopilot/feed", headers=fleet_manager_headers)
-    assert res.status_code == 200
-    assert res.json()["autopilot_enabled"] is True
-
-    # 3. Toggle autopilot off
-    res = await client.post(
-        "/api/v1/trips/autopilot/toggle",
-        json={"enabled": False},
-        headers=fleet_manager_headers
-    )
-    assert res.status_code == 200
-    assert res.json()["enabled"] is False
-
-    # 4. Get feed and verify it is disabled
-    res = await client.get("/api/v1/trips/autopilot/feed", headers=fleet_manager_headers)
-    assert res.status_code == 200
-    assert res.json()["autopilot_enabled"] is False
-
-@pytest.mark.anyio
-async def test_autopilot_single_unambiguous_candidate(
-    client: AsyncClient,
-    db: AsyncSession,
-    fleet_manager_headers: dict,
-    vehicle: Vehicle,
-    driver: Driver
-):
-    # Isolate database state for autopilot tests:
-    # 1. Retire all other vehicles
     await db.execute(
-        update(Vehicle).where(Vehicle.id != vehicle.id).values(status=VehicleStatus.retired)
+        update(Vehicle).where(Vehicle.id != veh.id).values(status=VehicleStatus.retired)
     )
-    # 2. Suspend all other drivers
     await db.execute(
-        update(Driver).where(Driver.id != driver.id).values(status=DriverStatus.suspended)
+        update(Driver).where(Driver.id != d.id).values(status=DriverStatus.suspended)
     )
-    # 3. Delete any other draft trips
     await db.execute(
         delete(Trip).where(Trip.status == TripStatus.draft)
     )
     await db.commit()
 
-    # 1. Create a draft trip that perfectly fits
     trip = Trip(
-        vehicle_id=vehicle.id,
-        driver_id=driver.id,
+        vehicle_id=veh.id,
+        driver_id=d.id,
         source="Gandhinagar Depot",
         destination="Ahmedabad Hub",
         planned_distance_km=Decimal("35.00"),
@@ -148,72 +232,88 @@ async def test_autopilot_single_unambiguous_candidate(
     db.add(trip)
     await db.commit()
     await db.refresh(trip)
+    _created_ids["trips"].append(trip.id)
 
-    # 2. Enable autopilot
     await client.post(
         "/api/v1/trips/autopilot/toggle",
         json={"enabled": True},
-        headers=fleet_manager_headers
+        headers=headers
     )
 
-    # 3. Call feed to process requests
-    res = await client.get("/api/v1/trips/autopilot/feed", headers=fleet_manager_headers)
+    res = await client.get("/api/v1/trips/autopilot/feed", headers=headers)
     assert res.status_code == 200
     data = res.json()
 
-    # Find the event for this trip
     event = next((e for e in data["events"] if e.get("trip_id") == str(trip.id)), None)
     assert event is not None
     assert event["event_type"] == "auto_dispatched"
     assert event["status"] == "dispatched"
     assert "Single unambiguous candidate" in event["reason"]
 
-    # Verify trip status in DB is now dispatched
     await db.refresh(trip)
     assert trip.status == TripStatus.dispatched
-    assert trip.vehicle_id == vehicle.id
-    assert trip.driver_id == driver.id
+    assert trip.vehicle_id == veh.id
+    assert trip.driver_id == d.id
 
-    # Verify vehicle and driver status are on_trip
-    await db.refresh(vehicle)
-    await db.refresh(driver)
-    assert vehicle.status == VehicleStatus.on_trip
-    assert driver.status == DriverStatus.on_trip
+    await db.refresh(veh)
+    assert veh.status == VehicleStatus.on_trip
+    await db.refresh(d)
+    assert d.status == DriverStatus.on_trip
 
-    # Reset autopilot state
     await client.post(
         "/api/v1/trips/autopilot/toggle",
         json={"enabled": False},
-        headers=fleet_manager_headers
+        headers=headers
     )
 
-@pytest.mark.anyio
-async def test_autopilot_conflict_escalation(
-    client: AsyncClient,
-    db: AsyncSession,
-    fleet_manager_headers: dict,
-    vehicle: Vehicle,
-    driver: Driver
-):
-    # Isolate database state for autopilot tests:
-    # 1. Retire all other vehicles
-    await db.execute(
-        update(Vehicle).where(Vehicle.id != vehicle.id).values(status=VehicleStatus.retired)
+
+async def test_autopilot_conflict_escalation(client, fleet_manager, db):
+    headers = await _create_user_with_role(db, client, "fleet_manager")
+
+    veh = Vehicle(
+        registration_number=f"REG-{uuid.uuid4().hex[:10].upper()}",
+        name="Autopilot Escalation Vehicle",
+        type="Van",
+        max_load_kg=Decimal("1000.00"),
+        odometer_km=Decimal("5000.00"),
+        acquisition_cost=Decimal("20000.00"),
+        status=VehicleStatus.available,
+        lat=Decimal("23.2156"),
+        lng=Decimal("72.6369")
     )
-    # 2. Suspend all other drivers
-    await db.execute(
-        update(Driver).where(Driver.id != driver.id).values(status=DriverStatus.suspended)
+    db.add(veh)
+    await db.commit()
+    await db.refresh(veh)
+    _created_ids["vehicles"].append(veh.id)
+
+    d = Driver(
+        full_name="Autopilot Escalation Driver",
+        license_number=f"DL-{uuid.uuid4().hex[:10].upper()}",
+        license_category="LMV",
+        license_expiry=date.today() + timedelta(days=50),
+        contact_number="+91-1234567890",
+        safety_score=Decimal("9.5"),
+        status=DriverStatus.available
     )
-    # 3. Delete any other draft trips
+    db.add(d)
+    await db.commit()
+    await db.refresh(d)
+    _created_ids["drivers"].append(d.id)
+
+    await db.execute(
+        update(Vehicle).where(Vehicle.id != veh.id).values(status=VehicleStatus.retired)
+    )
+    await db.execute(
+        update(Driver).where(Driver.id != d.id).values(status=DriverStatus.suspended)
+    )
     await db.execute(
         delete(Trip).where(Trip.status == TripStatus.draft)
     )
     await db.commit()
 
-    # 1. Create a draft trip with cargo exceeding max capacity
     trip = Trip(
-        vehicle_id=vehicle.id,
-        driver_id=driver.id,
+        vehicle_id=veh.id,
+        driver_id=d.id,
         source="Gandhinagar Depot",
         destination="Ahmedabad Hub",
         planned_distance_km=Decimal("35.00"),
@@ -223,45 +323,63 @@ async def test_autopilot_conflict_escalation(
     db.add(trip)
     await db.commit()
     await db.refresh(trip)
+    _created_ids["trips"].append(trip.id)
 
-    # 2. Enable autopilot
     await client.post(
         "/api/v1/trips/autopilot/toggle",
         json={"enabled": True},
-        headers=fleet_manager_headers
+        headers=headers
     )
 
-    # 3. Call feed to process requests
-    res = await client.get("/api/v1/trips/autopilot/feed", headers=fleet_manager_headers)
+    res = await client.get("/api/v1/trips/autopilot/feed", headers=headers)
     assert res.status_code == 200
     data = res.json()
 
-    # Find the event for this trip
     event = next((e for e in data["events"] if e.get("trip_id") == str(trip.id)), None)
     assert event is not None
     assert event["event_type"] == "no_candidates"
     assert event["status"] == "rejected"
 
-    # Verify trip status remains draft
     await db.refresh(trip)
     assert trip.status == TripStatus.draft
 
-    # Reset autopilot state
     await client.post(
         "/api/v1/trips/autopilot/toggle",
         json={"enabled": False},
-        headers=fleet_manager_headers
+        headers=headers
     )
 
-@pytest.mark.anyio
-async def test_autopilot_multiple_candidates_mocked_llm(
-    client: AsyncClient,
-    db: AsyncSession,
-    fleet_manager_headers: dict,
-    vehicle: Vehicle,
-    driver: Driver
-):
-    # Create another available vehicle and driver so we have multiple candidates
+
+async def test_autopilot_multiple_candidates_mocked_llm(client, fleet_manager, db):
+    headers = await _create_user_with_role(db, client, "fleet_manager")
+
+    veh = Vehicle(
+        registration_number=f"REG-{uuid.uuid4().hex[:10].upper()}",
+        name="Autopilot Vehicle 1",
+        type="Van",
+        max_load_kg=Decimal("1000.00"),
+        odometer_km=Decimal("5000.00"),
+        acquisition_cost=Decimal("20000.00"),
+        status=VehicleStatus.available,
+        lat=Decimal("23.2156"),
+        lng=Decimal("72.6369")
+    )
+    d = Driver(
+        full_name="Autopilot Driver 1",
+        license_number=f"DL-{uuid.uuid4().hex[:10].upper()}",
+        license_category="LMV",
+        license_expiry=date.today() + timedelta(days=50),
+        contact_number="+91-1234567890",
+        safety_score=Decimal("9.5"),
+        status=DriverStatus.available
+    )
+    db.add_all([veh, d])
+    await db.commit()
+    await db.refresh(veh)
+    await db.refresh(d)
+    _created_ids["vehicles"].append(veh.id)
+    _created_ids["drivers"].append(d.id)
+
     vehicle2 = Vehicle(
         registration_number=f"REG-{uuid.uuid4().hex[:10].upper()}",
         name="Autopilot Vehicle 2",
@@ -286,26 +404,23 @@ async def test_autopilot_multiple_candidates_mocked_llm(
     await db.commit()
     await db.refresh(vehicle2)
     await db.refresh(driver2)
+    _created_ids["vehicles"].append(vehicle2.id)
+    _created_ids["drivers"].append(driver2.id)
 
-    # Isolate database state for autopilot tests:
-    # 1. Retire all other vehicles
     await db.execute(
-        update(Vehicle).where(Vehicle.id != vehicle.id, Vehicle.id != vehicle2.id).values(status=VehicleStatus.retired)
+        update(Vehicle).where(Vehicle.id != veh.id, Vehicle.id != vehicle2.id).values(status=VehicleStatus.retired)
     )
-    # 2. Suspend all other drivers
     await db.execute(
-        update(Driver).where(Driver.id != driver.id, Driver.id != driver2.id).values(status=DriverStatus.suspended)
+        update(Driver).where(Driver.id != d.id, Driver.id != driver2.id).values(status=DriverStatus.suspended)
     )
-    # 3. Delete any other draft trips
     await db.execute(
         delete(Trip).where(Trip.status == TripStatus.draft)
     )
     await db.commit()
 
-    # Create draft trip
     trip = Trip(
-        vehicle_id=vehicle.id,
-        driver_id=driver.id,
+        vehicle_id=veh.id,
+        driver_id=d.id,
         source="Gandhinagar Depot",
         destination="Ahmedabad Hub",
         planned_distance_km=Decimal("35.00"),
@@ -315,17 +430,15 @@ async def test_autopilot_multiple_candidates_mocked_llm(
     db.add(trip)
     await db.commit()
     await db.refresh(trip)
+    _created_ids["trips"].append(trip.id)
 
-    # Enable autopilot
     await client.post(
         "/api/v1/trips/autopilot/toggle",
         json={"enabled": True},
-        headers=fleet_manager_headers
+        headers=headers
     )
 
-    # Case A: LLM says dispatch
     with patch("app.services.llm_service.call_llm") as mock_call:
-        import json
         mock_response = {
             "action": "dispatch",
             "vehicle_id": str(vehicle2.id),
@@ -334,11 +447,10 @@ async def test_autopilot_multiple_candidates_mocked_llm(
         }
         mock_call.return_value = json.dumps(mock_response)
 
-        res = await client.get("/api/v1/trips/autopilot/feed", headers=fleet_manager_headers)
+        res = await client.get("/api/v1/trips/autopilot/feed", headers=headers)
         assert res.status_code == 200
         data = res.json()
 
-        # Find the event
         event = next((e for e in data["events"] if e.get("trip_id") == str(trip.id)), None)
         assert event is not None
         assert event["event_type"] == "auto_dispatched"
@@ -346,16 +458,14 @@ async def test_autopilot_multiple_candidates_mocked_llm(
         assert event["vehicle_id"] == str(vehicle2.id)
         assert event["driver_id"] == str(driver2.id)
 
-        # Verify trip is dispatched in DB
         await db.refresh(trip)
         assert trip.status == TripStatus.dispatched
         assert trip.vehicle_id == vehicle2.id
         assert trip.driver_id == driver2.id
 
-    # Create another draft trip to test escalation
     trip2 = Trip(
-        vehicle_id=vehicle.id,
-        driver_id=driver.id,
+        vehicle_id=veh.id,
+        driver_id=d.id,
         source="Gandhinagar Depot",
         destination="Ahmedabad Hub",
         planned_distance_km=Decimal("35.00"),
@@ -365,15 +475,13 @@ async def test_autopilot_multiple_candidates_mocked_llm(
     db.add(trip2)
     await db.commit()
     await db.refresh(trip2)
+    _created_ids["trips"].append(trip2.id)
 
-    # Make vehicle2 and driver2 available again
     vehicle2.status = VehicleStatus.available
     driver2.status = DriverStatus.available
     await db.commit()
 
-    # Case B: LLM says escalate
     with patch("app.services.llm_service.call_llm") as mock_call:
-        import json
         mock_response = {
             "action": "escalate",
             "vehicle_id": None,
@@ -382,23 +490,20 @@ async def test_autopilot_multiple_candidates_mocked_llm(
         }
         mock_call.return_value = json.dumps(mock_response)
 
-        res = await client.get("/api/v1/trips/autopilot/feed", headers=fleet_manager_headers)
+        res = await client.get("/api/v1/trips/autopilot/feed", headers=headers)
         assert res.status_code == 200
         data = res.json()
 
-        # Find event for trip2
         event2 = next((e for e in data["events"] if e.get("trip_id") == str(trip2.id)), None)
         assert event2 is not None
         assert event2["event_type"] == "escalated"
         assert event2["status"] == "pending"
 
-        # Verify trip2 remains draft in DB
         await db.refresh(trip2)
         assert trip2.status == TripStatus.draft
 
-    # Reset autopilot state
     await client.post(
         "/api/v1/trips/autopilot/toggle",
         json={"enabled": False},
-        headers=fleet_manager_headers
+        headers=headers
     )
