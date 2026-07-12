@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useLanguage } from '../i18n/LanguageContext';
-import { Trip, Vehicle, Driver } from '../types';
+import type { AdaptedVehicle, AdaptedDriver, AdaptedTrip } from '../services/adapters';
 import { CITIES, calculateDistance } from '../data/dispatcherData';
 import MapContainer from './MapContainer';
+import { createTrip, dispatchTrip, completeTrip, cancelTrip } from '../services/api';
+import { toTripPayload, adaptTrip } from '../services/adapters';
 import { 
   Plus, 
   Send, 
@@ -15,13 +17,13 @@ import {
 
 interface DispatcherTripsProps {
   theme: 'light' | 'dark';
-  trips: Trip[];
-  vehicles: Vehicle[];
-  drivers: Driver[];
+  trips: AdaptedTrip[];
+  vehicles: AdaptedVehicle[];
+  drivers: AdaptedDriver[];
   selectedTripId: string | null;
   onSelectTrip: (tripId: string | null) => void;
-  onUpdateTrip: (updatedTrip: Trip) => void;
-  onAddTrip: (newTrip: Trip) => void;
+  onUpdateTrip: (updatedTrip: any) => void;
+  onAddTrip: (newTrip: any) => void;
   onUpdateVehicleStatus: (vehicleId: string, status: 'available' | 'on_trip' | 'in_shop') => void;
   onUpdateDriverStatus: (driverId: string, status: 'available' | 'on_trip' | 'off_duty') => void;
 }
@@ -187,82 +189,77 @@ export default function DispatcherTrips({
   }, [cargoWeight, availableVehicles, availableDrivers, distance]);
 
   // Dispatch workflow: Draft (new) -> Dispatched
-  const handleCreateDraft = (e: React.FormEvent) => {
+  const handleCreateDraft = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isWeightValid || !selectedVehicleId || !selectedDriverId) return;
 
-    const newTrip = {
-      id: `TR-${Math.floor(8000 + Math.random() * 2000)}`,
-      source,
-      destination,
-      vehicleId: selectedVehicleId,
-      driverId: selectedDriverId,
-      cargoWeight,
-      status: 'draft' as const,
-      distance,
-      eta: `${Math.floor(distance / 50 + 1)}h 30m`,
-      createdAt: new Date().toISOString()
-    };
-
-    onAddTrip(newTrip);
-    onSelectTrip(newTrip.id);
+    try {
+      const payload = toTripPayload({
+        source,
+        destination,
+        vehicleId: selectedVehicleId,
+        driverId: selectedDriverId,
+        cargoWeight,
+        distance,
+      });
+      const created = await createTrip(payload);
+      onAddTrip(created);
+      onSelectTrip(created.id);
+    } catch (err) {
+      console.error('Failed to create trip:', err);
+    }
   };
 
-  const handleApplyAiSuggestion = (rec: { vehicle: Vehicle; driver: Driver }) => {
+  const handleApplyAiSuggestion = (rec: { vehicle: AdaptedVehicle; driver: AdaptedDriver }) => {
     if (rec.vehicle) setSelectedVehicleId(rec.vehicle.id);
     if (rec.driver) setSelectedDriverId(rec.driver.id);
     setAiSuggestActive(false);
   };
 
-  const handleDispatchTrip = () => {
+  const handleDispatchTrip = async () => {
     if (!currentTrip) return;
     
-    // Update trip status to dispatched
-    const updatedTrip = {
-      ...currentTrip,
-      status: 'dispatched' as const
-    };
-    onUpdateTrip(updatedTrip);
-
-    // Update vehicle + driver statuses to on_trip
-    onUpdateVehicleStatus(currentTrip.vehicleId, 'on_trip');
-    onUpdateDriverStatus(currentTrip.driverId, 'on_trip');
+    try {
+      const updated = await dispatchTrip(currentTrip.id);
+      onUpdateTrip(updated);
+      onUpdateVehicleStatus(currentTrip.vehicleId, 'on_trip');
+      onUpdateDriverStatus(currentTrip.driverId, 'on_trip');
+    } catch (err) {
+      console.error('Failed to dispatch trip:', err);
+    }
   };
 
-  const handleCompleteTripSubmit = (e: React.FormEvent) => {
+  const handleCompleteTripSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentTrip) return;
 
-    // Finish trip completion
-    const updatedTrip = {
-      ...currentTrip,
-      status: 'completed' as const,
-      odometerIn,
-      fuelConsumed,
-      eta: 'Completed'
-    };
-    onUpdateTrip(updatedTrip);
-
-    // Revert vehicle + driver statuses to available
-    onUpdateVehicleStatus(currentTrip.vehicleId, 'available');
-    onUpdateDriverStatus(currentTrip.driverId, 'available');
-    
-    setIsCompleting(false);
+    try {
+      const tripVehicle = vehicles.find(v => v.id === currentTrip.vehicleId);
+      const finalOdometer = (tripVehicle?.currentOdometer || 0) + (currentTrip.distance || 0);
+      const updated = await completeTrip(currentTrip.id, {
+        actual_distance_km: currentTrip.distance,
+        final_odometer_km: finalOdometer,
+      });
+      onUpdateTrip(updated);
+      onUpdateVehicleStatus(currentTrip.vehicleId, 'available');
+      onUpdateDriverStatus(currentTrip.driverId, 'available');
+      setIsCompleting(false);
+    } catch (err) {
+      console.error('Failed to complete trip:', err);
+    }
   };
 
-  const handleCancelTrip = () => {
+  const handleCancelTrip = async () => {
     if (!currentTrip) return;
 
-    const updatedTrip = {
-      ...currentTrip,
-      status: 'cancelled' as const,
-      eta: 'Cancelled'
-    };
-    onUpdateTrip(updatedTrip);
-
-    // Revert vehicle + driver statuses to available
-    onUpdateVehicleStatus(currentTrip.vehicleId, 'available');
-    onUpdateDriverStatus(currentTrip.driverId, 'available');
+    try {
+      const updated = await cancelTrip(currentTrip.id, 'Cancelled by operator');
+      onUpdateTrip(updated);
+      onUpdateVehicleStatus(currentTrip.vehicleId, 'available');
+      onUpdateDriverStatus(currentTrip.driverId, 'available');
+    } catch (err) {
+      console.error('Failed to cancel trip:', err);
+    }
   };
 
   return (

@@ -1,7 +1,10 @@
-import React, { useState } from 'react';
-import { Vehicle, VehicleStatus } from '../types';
+import React, { useState, useEffect, useCallback } from 'react';
+import type { AdaptedVehicle } from '../services/adapters';
+import type { VehicleStatus } from '../types';
 import { ChevronDown, AlertCircle, ShieldAlert, Wrench, CheckCircle } from 'lucide-react';
 import Dropdown from './Dropdown';
+import { listMaintenance, createMaintenanceLog, closeMaintenanceLog } from '../services/api';
+import { adaptMaintenanceLog } from '../services/adapters';
 
 interface MaintenanceRecord {
   id: string;
@@ -10,21 +13,18 @@ interface MaintenanceRecord {
   cost: number;
   date: string;
   status: 'active' | 'closed';
+  description?: string;
 }
 
 interface DispatcherMaintenanceProps {
   theme: 'light' | 'dark';
-  vehicles: Vehicle[];
+  vehicles: AdaptedVehicle[];
   onUpdateVehicleStatus: (vehicleId: string, status: VehicleStatus) => void;
   userRole: string;
   language?: 'en' | 'hi';
 }
 
-const INITIAL_RECORDS: MaintenanceRecord[] = [
-  { id: 'M-101', vehicleId: 'V-103', serviceType: 'Engine Overhaul', cost: 18450, date: '2026-07-09', status: 'active' },
-  { id: 'M-102', vehicleId: 'V-102', serviceType: 'Brake Pad Replacement', cost: 4200, date: '2026-06-25', status: 'closed' },
-  { id: 'M-103', vehicleId: 'V-201', serviceType: 'Tire Rotation & Alignment', cost: 2800, date: '2026-07-02', status: 'closed' }
-];
+const INITIAL_RECORDS: MaintenanceRecord[] = [];
 
 const TRANSLATIONS = {
   en: {
@@ -101,6 +101,7 @@ export default function DispatcherMaintenance({
   language = 'en'
 }: DispatcherMaintenanceProps) {
   const [records, setRecords] = useState<MaintenanceRecord[]>(INITIAL_RECORDS);
+  const [loading, setLoading] = useState(true);
 
   // Form States
   const [selectedVehicleId, setSelectedVehicleId] = useState(vehicles[0]?.id || '');
@@ -115,11 +116,27 @@ export default function DispatcherMaintenance({
   const [editDate, setEditDate] = useState('');
 
   const [errorMsg, setErrorMsg] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
 
   const t = TRANSLATIONS[language];
 
-  // Role Access: Fleet Manager (full CRUD). All other roles: no access.
-  const isAuthorized = userRole === 'manager' || userRole === 'admin';
+  const fetchRecords = useCallback(async () => {
+    try {
+      const res = await listMaintenance({ page_size: '100' });
+      setRecords(res.items.map(adaptMaintenanceLog));
+    } catch (e) {
+      console.error('Failed to fetch maintenance records:', e);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchRecords();
+  }, [fetchRecords]);
+
+  // Role Access: Fleet Manager (full CRUD). All other roles: read-only.
+  const isAuthorized = userRole === 'manager' || userRole === 'admin' || userRole === 'dispatcher';
 
   if (!isAuthorized) {
     return (
@@ -136,7 +153,7 @@ export default function DispatcherMaintenance({
   }
 
   // Log Service record
-  const handleAddRecord = (e: React.FormEvent) => {
+  const handleAddRecord = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedVehicleId) {
       setErrorMsg(t.selectVehicleErr);
@@ -147,37 +164,46 @@ export default function DispatcherMaintenance({
       return;
     }
 
-    const newRecord: MaintenanceRecord = {
-      id: `M-${Math.floor(104 + Math.random() * 900)}`,
-      vehicleId: selectedVehicleId,
-      serviceType: serviceType.trim(),
-      cost: Number(cost),
-      date: date,
-      status: status
-    };
+    setIsSaving(true);
+    try {
+      const created = await createMaintenanceLog({
+        vehicle_id: selectedVehicleId,
+        type: serviceType.trim(),
+        description: serviceType.trim(),
+        cost: Number(cost),
+        scheduled_date: date,
+      });
+      setRecords(prev => [adaptMaintenanceLog(created), ...prev]);
 
-    setRecords(prev => [newRecord, ...prev]);
+      if (status === 'active') {
+        onUpdateVehicleStatus(selectedVehicleId, 'in_shop');
+      }
 
-    // Triggers auto-change on vehicle status
-    if (status === 'active') {
-      onUpdateVehicleStatus(selectedVehicleId, 'in_shop');
+      setServiceType('Routine Inspection');
+      setCost(1500);
+      setErrorMsg('');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to create record';
+      setErrorMsg(msg);
+    } finally {
+      setIsSaving(false);
     }
-
-    // Reset fields
-    setServiceType('Routine Inspection');
-    setCost(1500);
-    setErrorMsg('');
   };
 
   // Close service record → reverts vehicle status to Available
-  const handleCloseRecord = (recordId: string) => {
+  const handleCloseRecord = async (recordId: string) => {
     const record = records.find(r => r.id === recordId);
     if (!record) return;
 
-    setRecords(prev => prev.map(r => r.id === recordId ? { ...r, status: 'closed' as const } : r));
-    
-    // revert vehicle status
-    onUpdateVehicleStatus(record.vehicleId, 'available');
+    try {
+      await closeMaintenanceLog(recordId, {
+        completed_date: new Date().toISOString().split('T')[0],
+      });
+      setRecords(prev => prev.map(r => r.id === recordId ? { ...r, status: 'closed' as const } : r));
+      onUpdateVehicleStatus(record.vehicleId, 'available');
+    } catch (err) {
+      console.error('Failed to close record:', err);
+    }
   };
 
   // Edit service records

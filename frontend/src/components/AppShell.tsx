@@ -1,7 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Vehicle, Driver, Trip, ActiveScreen } from '../types';
-import { INITIAL_VEHICLES, INITIAL_DRIVERS, INITIAL_TRIPS } from '../data/dispatcherData';
 import { useLanguage } from '../i18n/LanguageContext';
+import { listVehicles, listDrivers, listTrips } from '../services/api';
+import { adaptVehicle, adaptDriver, adaptTrip } from '../services/adapters';
+import type { AdaptedVehicle, AdaptedDriver, AdaptedTrip } from '../services/adapters';
 import Dashboard from './Dashboard';
 import DispatcherTrips from './DispatcherTrips';
 import Settings from './Settings';
@@ -42,44 +44,71 @@ export default function AppShell({
 }: AppShellProps) {
   const { language, setLanguage, t } = useLanguage();
 
-  // Global states for vehicles, drivers, and trips inside current session
-  const [vehicles, setVehicles] = useState<Vehicle[]>(INITIAL_VEHICLES);
-  const [drivers, setDrivers] = useState<Driver[]>(INITIAL_DRIVERS);
-  const [trips, setTrips] = useState<Trip[]>(INITIAL_TRIPS);
+  const [vehicles, setVehicles] = useState<AdaptedVehicle[]>([]);
+  const [drivers, setDrivers] = useState<AdaptedDriver[]>([]);
+  const [trips, setTrips] = useState<AdaptedTrip[]>([]);
   const [activeScreen, setActiveScreen] = useState<ActiveScreen>('dashboard');
   const [selectedTripId, setSelectedTripId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  // Status changes callbacks
+  const fetchData = useCallback(async () => {
+    try {
+      const [vehRes, drvRes, tripRes] = await Promise.all([
+        listVehicles({ page_size: '100' }),
+        listDrivers({ page_size: '100' }),
+        listTrips({ page_size: '100' }),
+      ]);
+      setVehicles(vehRes.items.map(adaptVehicle));
+      setDrivers(drvRes.items.map(adaptDriver));
+      setTrips(tripRes.items.map(adaptTrip));
+    } catch (e) {
+      console.error('Failed to fetch data:', e);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  // Status changes callbacks - refetch from API for source of truth
   const handleUpdateTrip = (updatedTrip: Trip) => {
-    setTrips(prev => prev.map(t => t.id === updatedTrip.id ? updatedTrip : t));
+    setTrips(prev => prev.map(t => t.id === updatedTrip.id ? adaptTrip(updatedTrip) : t));
   };
 
   const handleAddTrip = (newTrip: Trip) => {
-    setTrips(prev => [newTrip, ...prev]);
+    setTrips(prev => [adaptTrip(newTrip), ...prev]);
+    // Also refetch to keep vehicle/driver statuses in sync
+    setTimeout(fetchData, 500);
   };
 
   const handleUpdateVehicleStatus = (vehicleId: string, status: any) => {
     setVehicles(prev => prev.map(v => v.id === vehicleId ? { ...v, status } : v));
+    setTimeout(fetchData, 500);
   };
 
   const handleUpdateDriverStatus = (driverId: string, status: any) => {
     setDrivers(prev => prev.map(d => d.id === driverId ? { ...d, status } : d));
+    setTimeout(fetchData, 500);
   };
 
-  const handleUpdateVehicle = (updatedVehicle: Vehicle) => {
+  const handleUpdateVehicle = (updatedVehicle: AdaptedVehicle) => {
     setVehicles(prev => prev.map(v => v.id === updatedVehicle.id ? updatedVehicle : v));
   };
 
-  const handleAddVehicle = (newVehicle: Vehicle) => {
+  const handleAddVehicle = (newVehicle: AdaptedVehicle) => {
     setVehicles(prev => [...prev, newVehicle]);
+    setTimeout(fetchData, 500);
   };
 
-  const handleUpdateDriver = (updatedDriver: Driver) => {
+  const handleUpdateDriver = (updatedDriver: AdaptedDriver) => {
     setDrivers(prev => prev.map(d => d.id === updatedDriver.id ? updatedDriver : d));
   };
 
-  const handleAddDriver = (newDriver: Driver) => {
+  const handleAddDriver = (newDriver: AdaptedDriver) => {
     setDrivers(prev => [...prev, newDriver]);
+    setTimeout(fetchData, 500);
   };
 
   // Fleet Pulse Segment Status Counter counts
@@ -153,7 +182,7 @@ export default function AppShell({
               <span>{t('dashboard')}</span>
             </button>
 
-            {(userRole === 'dispatcher' || userRole === 'admin') && (
+            {(userRole === 'dispatcher' || userRole === 'admin' || userRole === 'manager') && (
               <button
                 onClick={() => { setActiveScreen('trips'); }}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
@@ -170,7 +199,7 @@ export default function AppShell({
             )}
 
             {/* Fleet Page */}
-            {(userRole === 'manager' || userRole === 'admin') && (
+            {(userRole === 'manager' || userRole === 'admin' || userRole === 'dispatcher') && (
               <button
                 onClick={() => { setActiveScreen('fleet'); }}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
@@ -187,7 +216,7 @@ export default function AppShell({
             )}
 
             {/* Drivers Page */}
-            {(userRole === 'safety' || userRole === 'admin') && (
+            {(userRole === 'safety' || userRole === 'admin' || userRole === 'manager') && (
               <button
                 onClick={() => { setActiveScreen('drivers'); }}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
@@ -204,7 +233,7 @@ export default function AppShell({
             )}
 
             {/* Maintenance Page */}
-            {(userRole === 'manager' || userRole === 'admin') && (
+            {(userRole === 'manager' || userRole === 'admin' || userRole === 'dispatcher') && (
               <button
                 onClick={() => { setActiveScreen('maintenance'); }}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
@@ -221,7 +250,7 @@ export default function AppShell({
             )}
 
             {/* Fuel & Expenses */}
-            {(userRole === 'finance' || userRole === 'admin') && (
+            {(userRole === 'finance' || userRole === 'admin' || userRole === 'manager') && (
               <button
                 onClick={() => { setActiveScreen('fuel-expenses'); }}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
@@ -238,7 +267,7 @@ export default function AppShell({
             )}
 
             {/* Analytics */}
-            {(userRole === 'finance' || userRole === 'admin') && (
+            {(userRole === 'finance' || userRole === 'admin' || userRole === 'manager') && (
               <button
                 onClick={() => { setActiveScreen('analytics'); }}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
@@ -384,6 +413,15 @@ export default function AppShell({
 
         {/* Dynamic Screen Area with standard margin layout */}
         <div className="p-4 md:p-8 flex-1">
+          {loading ? (
+            <div className="flex items-center justify-center min-h-[400px]">
+              <div className="flex flex-col items-center gap-3">
+                <div className="w-8 h-8 rounded-full border-2 border-[#eb5e00]/30 border-t-[#eb5e00] animate-spin" />
+                <span className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Loading fleet data...</span>
+              </div>
+            </div>
+          ) : (
+          <>
           {activeScreen === 'dashboard' && (
             <Dashboard 
               theme={theme}
@@ -468,6 +506,8 @@ export default function AppShell({
               userRole={userRole}
               onLogout={onLogout}
             />
+          )}
+          </>
           )}
         </div>
       </main>

@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { useLanguage } from '../i18n/LanguageContext';
-import { Trip, Vehicle, Driver, ActiveScreen } from '../types';
+import type { AdaptedVehicle, AdaptedDriver, AdaptedTrip } from '../services/adapters';
+import type { ActiveScreen } from '../types';
 import { CITIES } from '../data/dispatcherData';
 import MapContainer from './MapContainer';
 import { 
@@ -19,9 +20,9 @@ import {
 
 interface DispatcherDashboardProps {
   theme: 'light' | 'dark';
-  trips: Trip[];
-  vehicles: Vehicle[];
-  drivers: Driver[];
+  trips: AdaptedTrip[];
+  vehicles: AdaptedVehicle[];
+  drivers: AdaptedDriver[];
   onSelectTrip: (tripId: string) => void;
   setScreen: (screen: ActiveScreen) => void;
 }

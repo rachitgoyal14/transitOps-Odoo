@@ -1,57 +1,22 @@
 import React, { useState } from 'react';
 import { useLanguage } from '../i18n/LanguageContext';
-import { Driver, DriverStatus } from '../types';
+import type { AdaptedDriver } from '../services/adapters';
+import type { DriverStatus } from '../types';
 import { Search, ChevronDown, Plus, Edit2, AlertCircle, X, ShieldAlert, Star } from 'lucide-react';
 import Dropdown from './Dropdown';
+import { createDriver, updateDriver } from '../services/api';
+import { toDriverPayload } from '../services/adapters';
+import { adaptDriver } from '../services/adapters';
 
-interface ExtendedDriver {
-  id: string;
-  name: string;
-  licenseNo: string;
-  category: string;
-  expiry: string; // e.g. '2026-06-15'
-  contact: string;
-  tripCompliance: number; // e.g. 96 (%)
-  safetyScore: number; // e.g. 92
-  status: DriverStatus | 'suspended';
-}
+type ExtendedDriver = AdaptedDriver;
 
 interface DispatcherDriversProps {
   theme: 'light' | 'dark';
-  drivers: Driver[];
-  onAddDriver: (d: Driver) => void;
-  onUpdateDriver: (d: Driver) => void;
+  drivers: AdaptedDriver[];
+  onAddDriver: (d: AdaptedDriver) => void;
+  onUpdateDriver: (d: AdaptedDriver) => void;
   userRole: string;
 }
-
-// Map standard Driver to ExtendedDriver with mock default values if missing
-const extendDrivers = (rawDrivers: Driver[]): ExtendedDriver[] => {
-  const mockLicenseData: Record<string, Partial<ExtendedDriver>> = {
-    'D-01': { licenseNo: 'DL-90204A', category: 'Heavy Commercial', expiry: '2027-05-12', contact: '+91 98402 12053', tripCompliance: 98, safetyScore: 94 },
-    'D-02': { licenseNo: 'DL-81530B', category: 'Heavy Commercial', expiry: '2026-03-10', contact: '+91 91204 88301', tripCompliance: 95, safetyScore: 88 },
-    'D-03': { licenseNo: 'DL-74910C', category: 'Heavy Commercial', expiry: '2027-08-22', contact: '+91 97720 41042', tripCompliance: 92, safetyScore: 90 },
-    'D-04': { licenseNo: 'DL-30129D', category: 'Medium Goods', expiry: '2026-05-01', contact: '+91 96541 32905', tripCompliance: 96, safetyScore: 91 },
-    'D-05': { licenseNo: 'DL-11029E', category: 'Light Goods', expiry: '2027-11-30', contact: '+91 91102 94812', tripCompliance: 99, safetyScore: 97 },
-    'D-06': { licenseNo: 'DL-88204F', category: 'Heavy Commercial', expiry: '2026-06-14', contact: '+91 98820 41410', tripCompliance: 90, safetyScore: 85 },
-    'D-07': { licenseNo: 'DL-39501G', category: 'Medium Goods', expiry: '2027-01-20', contact: '+91 93950 12024', tripCompliance: 94, safetyScore: 89 },
-    'D-08': { licenseNo: 'DL-72100H', category: 'Light Goods', expiry: '2026-02-15', contact: '+91 97210 03051', tripCompliance: 97, safetyScore: 95 }
-  };
-
-  return rawDrivers.map(d => {
-    const extra = mockLicenseData[d.id] || {
-      licenseNo: `DL-${Math.floor(10000 + Math.random() * 90000)}X`,
-      category: 'Medium Goods',
-      expiry: '2027-01-01',
-      contact: '+91 90000 00000',
-      tripCompliance: 95,
-      safetyScore: 90
-    };
-    return {
-      ...d,
-      ...extra
-    } as ExtendedDriver;
-  });
-};
 
 export default function DispatcherDrivers({
   theme,
@@ -80,13 +45,14 @@ export default function DispatcherDrivers({
   const [formStatus, setFormStatus] = useState<DriverStatus | 'suspended'>('available');
 
   const [errorMsg, setErrorMsg] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
 
   const { t } = useLanguage();
 
   // Role Gate Enforcements:
   // Safety Officer: full CRUD. All other roles: no access.
-  const hasWriteAccess = userRole === 'safety' || userRole === 'admin';
-  const hasReadAccess = userRole === 'safety' || userRole === 'admin';
+  const hasWriteAccess = userRole === 'safety' || userRole === 'admin' || userRole === 'manager';
+  const hasReadAccess = userRole === 'safety' || userRole === 'admin' || userRole === 'manager';
 
   if (!hasReadAccess) {
     return (
@@ -103,11 +69,10 @@ export default function DispatcherDrivers({
   }
 
   // Extend data
-  const extendedDriversList = extendDrivers(drivers);
+  const extendedDriversList = drivers;
 
-  // Check if license is expired relative to current local time (2026-07-11)
   const isExpired = (dateStr: string) => {
-    const today = new Date('2026-07-11');
+    const today = new Date();
     const expiryDate = new Date(dateStr);
     return expiryDate < today;
   };
@@ -140,31 +105,40 @@ export default function DispatcherDrivers({
     setIsModalOpen(true);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formName.trim() || !formLicense.trim() || !formExpiry.trim()) {
       setErrorMsg(t('requiredFieldsErr'));
       return;
     }
 
-    const payload: ExtendedDriver = {
-      id: editingDriver ? editingDriver.id : `D-${Math.floor(10 + Math.random() * 90)}`,
-      name: formName.trim(),
-      licenseNo: formLicense.trim().toUpperCase(),
-      category: formCategory,
-      expiry: formExpiry,
-      contact: formContact.trim(),
-      tripCompliance: formCompliance,
-      safetyScore: formSafetyScore,
-      status: formStatus
-    };
+    setIsSaving(true);
+    try {
+      const payload = toDriverPayload({
+        name: formName.trim(),
+        licenseNo: formLicense.trim().toUpperCase(),
+        category: formCategory,
+        expiry: formExpiry,
+        contact: formContact.trim(),
+        compliance: formCompliance,
+        safetyScore: formSafetyScore,
+        status: formStatus
+      });
 
-    if (editingDriver) {
-      onUpdateDriver(payload);
-    } else {
-      onAddDriver(payload);
+      if (editingDriver) {
+        const updated = await updateDriver(editingDriver.id, payload);
+        onUpdateDriver(adaptDriver(updated));
+      } else {
+        const created = await createDriver(payload);
+        onAddDriver(adaptDriver(created));
+      }
+      setIsModalOpen(false);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Save failed';
+      setErrorMsg(msg);
+    } finally {
+      setIsSaving(false);
     }
-    setIsModalOpen(false);
   };
 
   const filteredDrivers = extendedDriversList.filter(d => {

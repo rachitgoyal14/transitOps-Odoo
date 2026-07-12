@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { ShieldAlert, TrendingUp, Compass, Award, Activity, AlertTriangle, FileText, CheckCircle } from 'lucide-react';
 import { jsPDF } from 'jspdf';
+import { getFuelEfficiency, getFleetUtilization, getOperationalCost, downloadCSV } from '../services/api';
 
 interface DispatcherAnalyticsProps {
   theme: 'light' | 'dark';
@@ -70,27 +71,63 @@ export default function DispatcherAnalytics({
   const [hoveredBarIndex, setHoveredBarIndex] = useState<number | null>(null);
   const [hoveredLineIndex, setHoveredLineIndex] = useState<number | null>(null);
 
+  // Real data from API
+  const [fuelEfficiencyData, setFuelEfficiencyData] = useState<any[]>([]);
+  const [fleetUtilData, setFleetUtilData] = useState<any[]>([]);
+  const [operationalCostData, setOperationalCostData] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
   const t = TRANSLATIONS[language];
 
-  // Real CSV Export Generator (no popup alert)
-  const handleExportCSV = () => {
-    const headers = ['Week', 'Fuel Costs (INR)', 'Other Expenses (INR)'];
-    const rows = barChartData.map(d => [d.week, d.fuel, d.other]);
-    
-    const csvContent = [
-      headers.join(','),
-      ...rows.map(row => row.join(','))
-    ].join('\n');
-    
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', `fleet_operations_report_${new Date().toISOString().split('T')[0]}.csv`);
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+  const fetchReportData = useCallback(async () => {
+    try {
+      const [fuelRes, utilRes, costRes] = await Promise.all([
+        getFuelEfficiency().catch(() => []),
+        getFleetUtilization().catch(() => []),
+        getOperationalCost().catch(() => []),
+      ]);
+      setFuelEfficiencyData(Array.isArray(fuelRes) ? fuelRes : []);
+      setFleetUtilData(Array.isArray(utilRes) ? utilRes : []);
+      setOperationalCostData(Array.isArray(costRes) ? costRes : []);
+    } catch (e) {
+      console.error('Failed to fetch report data:', e);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchReportData();
+  }, [fetchReportData]);
+
+  // Real CSV Export Generator using API endpoint
+  const handleExportCSV = async () => {
+    try {
+      const blob = await downloadCSV('fuel-efficiency');
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.setAttribute('href', url);
+      link.setAttribute('download', `fleet_operations_report_${new Date().toISOString().split('T')[0]}.csv`);
+      link.style.visibility = 'hidden';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      // Fallback to local CSV generation
+      const headers = ['Week', 'Fuel Costs (INR)', 'Other Expenses (INR)'];
+      const rows = barChartData.map(d => [d.week, d.fuel, d.other]);
+      const csvContent = [headers.join(','), ...rows.map(row => row.join(','))].join('\n');
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.setAttribute('href', url);
+      link.setAttribute('download', `fleet_operations_report_${new Date().toISOString().split('T')[0]}.csv`);
+      link.style.visibility = 'hidden';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
   };
 
   // Real PDF Export Generator (no popup alert)
@@ -181,7 +218,7 @@ export default function DispatcherAnalytics({
   };
 
   // Role Gate: Financial Analyst only. All other roles: no access.
-  const isAuthorized = userRole === 'finance' || userRole === 'admin';
+  const isAuthorized = userRole === 'finance' || userRole === 'admin' || userRole === 'manager';
 
   if (!isAuthorized) {
     return (

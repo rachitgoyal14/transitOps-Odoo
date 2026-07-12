@@ -1,9 +1,9 @@
 import React, { useEffect, useRef, useMemo } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { Trip, Vehicle, TripStatus } from '../types';
 import { CITIES } from '../data/dispatcherData';
 import { Navigation, Radio } from 'lucide-react';
+import type { AdaptedVehicle, AdaptedTrip } from '../services/adapters';
 
 // Map relative city names to real-world latitude and longitude coordinates in India
 const CITY_COORDS: Record<string, [number, number]> = {
@@ -58,8 +58,8 @@ function getCurvedPath(source: [number, number], dest: [number, number]): [numbe
 
 interface MapContainerProps {
   theme: 'light' | 'dark';
-  trips: Trip[];
-  vehicles: Vehicle[];
+  trips: AdaptedTrip[];
+  vehicles: AdaptedVehicle[];
   selectedTripId?: string | null;
   activeFilters: {
     vehicleType: string;

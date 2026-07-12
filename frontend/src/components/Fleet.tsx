@@ -1,14 +1,18 @@
 import React, { useState } from 'react';
 import { useLanguage } from '../i18n/LanguageContext';
-import { Vehicle, VehicleType, VehicleStatus } from '../types';
+import type { AdaptedVehicle } from '../services/adapters';
+import type { VehicleType, VehicleStatus } from '../types';
 import { Search, ChevronDown, Plus, Edit2, AlertCircle, Check, X, ShieldAlert } from 'lucide-react';
 import Dropdown from './Dropdown';
+import { createVehicle, updateVehicle } from '../services/api';
+import { toVehiclePayload } from '../services/adapters';
+import { adaptVehicle } from '../services/adapters';
 
 interface DispatcherFleetProps {
   theme: 'light' | 'dark';
-  vehicles: Vehicle[];
-  onAddVehicle: (v: Vehicle) => void;
-  onUpdateVehicle: (v: Vehicle) => void;
+  vehicles: AdaptedVehicle[];
+  onAddVehicle: (v: AdaptedVehicle) => void;
+  onUpdateVehicle: (v: AdaptedVehicle) => void;
   userRole: string;
 }
 
@@ -25,7 +29,7 @@ export default function DispatcherFleet({
   
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingVehicle, setEditingVehicle] = useState<Vehicle | null>(null);
+  const [editingVehicle, setEditingVehicle] = useState<AdaptedVehicle | null>(null);
   const [formRegNo, setFormRegNo] = useState('');
   const [formName, setFormName] = useState('');
   const [formType, setFormType] = useState<VehicleType>('semi');
@@ -33,6 +37,7 @@ export default function DispatcherFleet({
   const [formOdometer, setFormOdometer] = useState<number>(10000);
   const [formCost, setFormCost] = useState<number>(35000);
   const [formStatus, setFormStatus] = useState<VehicleStatus>('available');
+  const [isSaving, setIsSaving] = useState(false);
 
   // Manual status override confirmation gate
   const [showOverrideConfirm, setShowOverrideConfirm] = useState(false);
@@ -60,7 +65,7 @@ export default function DispatcherFleet({
   }
 
   // Handle open add / edit modal
-  const openModal = (vehicle?: Vehicle) => {
+  const openModal = (vehicle?: AdaptedVehicle) => {
     if (vehicle) {
       setEditingVehicle(vehicle);
       setFormRegNo(vehicle.id);
@@ -112,7 +117,7 @@ export default function DispatcherFleet({
   };
 
   // Submit Handler
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formRegNo.trim() || !formName.trim()) {
       setErrorMsg(t.requiredFieldsErr);
@@ -126,22 +131,32 @@ export default function DispatcherFleet({
       return;
     }
 
-    const payload: Vehicle & { acquisitionCost?: number } = {
-      id: formRegNo.trim().toUpperCase(),
-      name: formName.trim(),
-      type: formType,
-      status: formStatus,
-      capacity: formCapacity,
-      currentOdometer: formOdometer,
-      acquisitionCost: formCost
-    };
+    setIsSaving(true);
+    try {
+      const payload = toVehiclePayload({
+        id: formRegNo.trim().toUpperCase(),
+        name: formName.trim(),
+        type: formType,
+        status: formStatus,
+        capacity: formCapacity,
+        currentOdometer: formOdometer,
+        acquisitionCost: formCost
+      });
 
-    if (editingVehicle) {
-      onUpdateVehicle(payload);
-    } else {
-      onAddVehicle(payload);
+      if (editingVehicle) {
+        const updated = await updateVehicle(editingVehicle.id, payload);
+        onUpdateVehicle(adaptVehicle(updated));
+      } else {
+        const created = await createVehicle(payload);
+        onAddVehicle(adaptVehicle(created));
+      }
+      setIsModalOpen(false);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Save failed';
+      setErrorMsg(msg);
+    } finally {
+      setIsSaving(false);
     }
-    setIsModalOpen(false);
   };
 
   // Filtering list

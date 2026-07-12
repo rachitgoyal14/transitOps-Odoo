@@ -7,6 +7,8 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import AppShell from './components/AppShell';
 import { LanguageProvider, useLanguage } from './i18n/LanguageContext';
+import { login as apiLogin, getMe } from './services/api';
+import { mapRole } from './services/adapters';
 import { 
   Mail, 
   Lock, 
@@ -138,24 +140,38 @@ function MainApp() {
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const [loginError, setLoginError] = useState('');
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!validate()) return;
 
     setIsSubmitting(true);
+    setLoginError('');
 
-    setTimeout(() => {
-      setIsSubmitting(false);
-      
+    try {
+      const data = await apiLogin(email, password);
+      localStorage.setItem('auth_token', data.access_token);
+
+      const user = await getMe();
+      const mappedRole = mapRole(user.role);
+      localStorage.setItem('auth_user', JSON.stringify(user));
+
       if (rememberMe) {
         localStorage.setItem('remember_email', email);
       } else {
         localStorage.removeItem('remember_email');
       }
 
-      // Immediately go to the designated page for ALL roles, bypassing confirmation screen
+      // Set the role from the backend user data
+      setSelectedRole(ROLES.find(r => r.id === mappedRole) || ROLES[0]);
       navigate('dispatcher');
-    }, 1200);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Login failed';
+      setLoginError(msg);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleReset = () => {
@@ -174,6 +190,8 @@ function MainApp() {
         userEmail={email || "operator.ops@transitops.in"}
         userRole={selectedRole.id}
         onLogout={() => {
+          localStorage.removeItem('auth_token');
+          localStorage.removeItem('auth_user');
           handleReset();
           navigate('login');
         }}
@@ -249,6 +267,13 @@ function MainApp() {
 
           {/* Horizontal Line */}
           <div className="border-b border-zinc-100/40 dark:border-zinc-900/10 mb-6" />
+
+          {loginError && (
+            <div className="p-3 text-xs text-red-500 border border-red-500/20 rounded-xl bg-red-500/5 flex items-center gap-2 mb-4">
+              <AlertCircle className="w-4 h-4 flex-shrink-0" />
+              <span>{loginError}</span>
+            </div>
+          )}
 
           <AnimatePresence mode="wait">
             {submitSuccess ? (

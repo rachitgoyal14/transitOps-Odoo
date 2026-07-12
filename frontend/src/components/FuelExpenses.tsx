@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
-import { Vehicle } from '../types';
+import React, { useState, useEffect, useCallback } from 'react';
+import type { AdaptedVehicle } from '../services/adapters';
 import { ChevronDown, Plus, ShieldAlert, Sparkles, Calendar, Landmark, X } from 'lucide-react';
 import Dropdown from './Dropdown';
+import { listFuelLogs, createFuelLog, listExpenses, createExpense } from '../services/api';
 
-interface FuelLog {
+interface FuelLogEntry {
   id: string;
   vehicleId: string;
   date: string;
@@ -22,22 +23,12 @@ interface OtherExpense {
 
 interface DispatcherFuelExpensesProps {
   theme: 'light' | 'dark';
-  vehicles: Vehicle[];
+  vehicles: AdaptedVehicle[];
   userRole: string;
   language?: 'en' | 'hi';
 }
 
-const INITIAL_FUEL_LOGS: FuelLog[] = [
-  { id: 'FL-01', vehicleId: 'V-101', date: '2026-07-11', liters: 120, cost: 11400 },
-  { id: 'FL-02', vehicleId: 'V-102', date: '2026-07-10', liters: 180, cost: 17100 },
-  { id: 'FL-03', vehicleId: 'V-301', date: '2026-07-09', liters: 45, cost: 4275 }
-];
-
-const INITIAL_EXPENSES: OtherExpense[] = [
-  { id: 'EX-01', tripId: 'TR-8041', vehicleId: 'V-101', toll: 1800, misc: 450, total: 2250 },
-  { id: 'EX-02', tripId: 'TR-8044', vehicleId: 'V-102', toll: 1200, misc: 800, total: 2000 },
-  { id: 'EX-03', tripId: 'TR-8043', vehicleId: 'V-301', toll: 600, misc: 200, total: 800 }
-];
+const INITIAL_EXPENSES: OtherExpense[] = [];
 
 const TRANSLATIONS = {
   en: {
@@ -114,8 +105,9 @@ export default function DispatcherFuelExpenses({
   userRole,
   language = 'en'
 }: DispatcherFuelExpensesProps) {
-  const [fuelLogs, setFuelLogs] = useState<FuelLog[]>(INITIAL_FUEL_LOGS);
-  const [expenses, setExpenses] = useState<OtherExpense[]>(INITIAL_EXPENSES);
+  const [fuelLogs, setFuelLogs] = useState<FuelLogEntry[]>([]);
+  const [expenses, setExpenses] = useState<OtherExpense[]>([]);
+  const [loading, setLoading] = useState(true);
 
   // Filters
   const [vehicleFilter, setVehicleFilter] = useState('All');
@@ -126,21 +118,54 @@ export default function DispatcherFuelExpenses({
   const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false);
 
   const [fuelVehicle, setFuelVehicle] = useState(vehicles[0]?.id || '');
-  const [fuelDate, setFuelDate] = useState('2026-07-11');
+  const [fuelDate, setFuelDate] = useState(new Date().toISOString().split('T')[0]);
   const [fuelLiters, setFuelLiters] = useState<number>(100);
   const [fuelCost, setFuelCost] = useState<number>(9500);
 
-  const [expTrip, setExpTrip] = useState('TR-8045');
+  const [expTrip, setExpTrip] = useState('');
   const [expVehicle, setExpVehicle] = useState(vehicles[0]?.id || '');
   const [expToll, setExpToll] = useState<number>(1000);
   const [expMisc, setExpMisc] = useState<number>(300);
 
   const [errorMsg, setErrorMsg] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
 
   const t = TRANSLATIONS[language];
 
+  const fetchData = useCallback(async () => {
+    try {
+      const [fuelRes, expRes] = await Promise.all([
+        listFuelLogs({ page_size: '100' }),
+        listExpenses({ page_size: '100' }),
+      ]);
+      setFuelLogs(fuelRes.items.map(f => ({
+        id: f.id,
+        vehicleId: f.vehicle_id,
+        date: f.filled_at?.split('T')[0] || f.created_at.split('T')[0],
+        liters: f.liters,
+        cost: f.total_cost || f.cost_per_liter * f.liters,
+      })));
+      setExpenses(expRes.items.map(e => ({
+        id: e.id,
+        tripId: e.trip_id || '--',
+        vehicleId: e.vehicle_id,
+        toll: e.category === 'toll' ? e.amount : 0,
+        misc: e.category !== 'toll' ? e.amount : 0,
+        total: e.amount,
+      })));
+    } catch (e) {
+      console.error('Failed to fetch fuel/expenses:', e);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
   // Role: Financial Analyst (full CRUD). All other roles: no access.
-  const isAuthorized = userRole === 'finance' || userRole === 'admin';
+  const isAuthorized = userRole === 'finance' || userRole === 'admin' || userRole === 'manager';
 
   if (!isAuthorized) {
     return (
@@ -162,46 +187,72 @@ export default function DispatcherFuelExpenses({
   const maintenanceBaseline = 25450;
   const totalOperationalCost = totalFuelCost + totalOtherExpenses + maintenanceBaseline;
 
-  const handleAddFuelLog = (e: React.FormEvent) => {
+  const handleAddFuelLog = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!fuelVehicle) {
       setErrorMsg(t.pleaseSelectVehicle);
       return;
     }
 
-    const newLog: FuelLog = {
-      id: `FL-${Math.floor(10 + Math.random() * 90)}`,
-      vehicleId: fuelVehicle,
-      date: fuelDate,
-      liters: Number(fuelLiters),
-      cost: Number(fuelCost)
-    };
-
-    setFuelLogs(prev => [newLog, ...prev]);
-    setIsFuelModalOpen(false);
-    setErrorMsg('');
+    setIsSaving(true);
+    try {
+      const created = await createFuelLog({
+        vehicle_id: fuelVehicle,
+        liters: Number(fuelLiters),
+        cost_per_liter: Number(fuelCost) / Number(fuelLiters),
+        filled_at: fuelDate,
+      });
+      setFuelLogs(prev => [{
+        id: created.id,
+        vehicleId: created.vehicle_id,
+        date: created.filled_at?.split('T')[0] || created.created_at.split('T')[0],
+        liters: created.liters,
+        cost: created.total_cost || created.cost_per_liter * created.liters,
+      }, ...prev]);
+      setIsFuelModalOpen(false);
+      setErrorMsg('');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to log fuel';
+      setErrorMsg(msg);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
-  const handleAddExpense = (e: React.FormEvent) => {
+  const handleAddExpense = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!expTrip.trim()) {
       setErrorMsg(t.pleaseEnterTrip);
       return;
     }
 
-    const totalExp = Number(expToll) + Number(expMisc);
-    const newExp: OtherExpense = {
-      id: `EX-${Math.floor(10 + Math.random() * 90)}`,
-      tripId: expTrip.trim().toUpperCase(),
-      vehicleId: expVehicle,
-      toll: Number(expToll),
-      misc: Number(expMisc),
-      total: totalExp
-    };
-
-    setExpenses(prev => [newExp, ...prev]);
-    setIsExpenseModalOpen(false);
-    setErrorMsg('');
+    setIsSaving(true);
+    try {
+      const totalExp = Number(expToll) + Number(expMisc);
+      const created = await createExpense({
+        vehicle_id: expVehicle,
+        trip_id: expTrip.trim() || undefined,
+        category: 'other',
+        amount: totalExp,
+        description: `Toll: ${expToll}, Misc: ${expMisc}`,
+        expense_date: new Date().toISOString().split('T')[0],
+      });
+      setExpenses(prev => [{
+        id: created.id,
+        tripId: created.trip_id || '--',
+        vehicleId: created.vehicle_id,
+        toll: Number(expToll),
+        misc: Number(expMisc),
+        total: created.amount,
+      }, ...prev]);
+      setIsExpenseModalOpen(false);
+      setErrorMsg('');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to add expense';
+      setErrorMsg(msg);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   // Filter lists
