@@ -3,9 +3,9 @@ from typing import AsyncGenerator
 from app.core.config import settings
 
 engine = create_async_engine(
-    settings.database_url,
-    echo=False,
-    future=True
+    settings.DATABASE_URL,
+    connect_args={"ssl": "require"},
+    pool_pre_ping=True,
 )
 
 AsyncSessionLocal = async_sessionmaker(

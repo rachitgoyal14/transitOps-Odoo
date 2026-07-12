@@ -20,7 +20,7 @@ def anyio_backend():
 @pytest.fixture
 async def db() -> AsyncGenerator[AsyncSession, None]:
     # Create engine inside the fixture to ensure it binds to the current test event loop
-    engine = create_async_engine(settings.database_url, echo=False)
+    engine = create_async_engine(settings.DATABASE_URL, connect_args={"ssl": "require"}, echo=False)
     async with engine.connect() as conn:
         # Begin transaction
         transaction = await conn.begin()
