@@ -134,7 +134,7 @@ export async function getTrip(id: string) {
 }
 
 export async function createTrip(data: Record<string, unknown>) {
-  return request<Trip>('/trips/', { method: 'POST', body: JSON.stringify(data) });
+  return request<Trip>('/trips', { method: 'POST', body: JSON.stringify(data) });
 }
 
 export async function updateTrip(id: string, data: Record<string, unknown>) {
