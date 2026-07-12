@@ -1,5 +1,6 @@
 import ssl
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from typing import AsyncGenerator
 from app.core.config import settings
 
 # Neon DB requires SSL — asyncpg uses connect_args for SSL, not URL params
@@ -14,11 +15,14 @@ engine = create_async_engine(
     connect_args={"ssl": _ssl_context},
 )
 
-async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+AsyncSessionLocal = async_sessionmaker(
+    bind=engine,
+    class_=AsyncSession,
+    expire_on_commit=False
+)
 
-
-async def get_db():
-    async with async_session() as session:
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    async with AsyncSessionLocal() as session:
         try:
             yield session
         finally:

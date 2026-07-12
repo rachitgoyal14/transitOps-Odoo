@@ -1,42 +1,35 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-
-from app.models.user import Role, User
+from sqlalchemy.future import select
+from app.core.config import settings
 from app.core.security import hash_password
+from app.models.user import User
+from app.models.role import Role
 
-SEED_ROLES = ["fleet_manager", "dispatcher", "safety_officer", "financial_analyst"]
-
-DEFAULT_ADMIN = {
-    "full_name": "Admin",
-    "email": "admin@transitops.com",
-    "password": "secret",
-}
-
-
-async def seed_roles(db: AsyncSession) -> None:
-    for role_name in SEED_ROLES:
-        exists = await db.execute(select(Role).where(Role.name == role_name))
-        if exists.scalar_one_or_none() is None:
-            db.add(Role(name=role_name))
-    await db.commit()
-
-
-async def seed_admin(db: AsyncSession) -> None:
-    result = await db.execute(select(User).where(User.email == DEFAULT_ADMIN["email"]))
-    if result.scalar_one_or_none() is not None:
+async def seed_default_admin(db: AsyncSession):
+    # Check if user with default admin email already exists
+    stmt = select(User).where(User.email == settings.default_admin_email)
+    result = await db.execute(stmt)
+    existing_user = result.scalar_one_or_none()
+    
+    if existing_user:
         return
-    role_result = await db.execute(select(Role).where(Role.name == "fleet_manager"))
-    fleet_role = role_result.scalar_one()
-    user = User(
-        full_name=DEFAULT_ADMIN["full_name"],
-        email=DEFAULT_ADMIN["email"],
-        hashed_password=hash_password(DEFAULT_ADMIN["password"]),
-        role_id=fleet_role.id,
+        
+    # Look up the role_id for "fleet_manager"
+    role_stmt = select(Role).where(Role.name == "fleet_manager")
+    role_result = await db.execute(role_stmt)
+    role = role_result.scalar_one_or_none()
+    
+    if not role:
+        raise ValueError("Role 'fleet_manager' not found. Please ensure database is seeded.")
+        
+    # Create the default admin user
+    default_admin = User(
+        full_name="Default Admin",
+        email=settings.default_admin_email,
+        hashed_password=hash_password(settings.default_admin_password),
+        role_id=role.id,
+        is_active=True
     )
-    db.add(user)
+    
+    db.add(default_admin)
     await db.commit()
-
-
-async def init_db(db: AsyncSession) -> None:
-    await seed_roles(db)
-    await seed_admin(db)

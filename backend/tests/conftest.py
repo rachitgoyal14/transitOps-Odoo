@@ -18,7 +18,8 @@ from app.models.briefing_cache import BriefingCache
 from app.models.fuel_log import FuelLog
 from app.models.maintenance_log import MaintenanceLog, MaintenanceStatus
 from app.models.trip import Trip, TripStatus
-from app.models.user import Role, User
+from app.models.role import Role
+from app.models.user import User
 from app.models.vehicle import Vehicle, VehicleStatus
 
 import app.models  # noqa: F401
@@ -154,7 +155,7 @@ async def create_user(
 
 
 def auth_header(user: User) -> dict[str, str]:
-    token = create_access_token(data={"sub": str(user.id)})
+    token = create_access_token(user_id=str(user.id), role="fleet_manager")
     return {"Authorization": f"Bearer {token}"}
 
 

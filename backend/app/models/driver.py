@@ -1,36 +1,31 @@
 import uuid
-import enum
-from datetime import datetime, date
-from sqlalchemy import String, Numeric, Date, Enum as SAEnum, DateTime, Uuid, func
+from decimal import Decimal
+from datetime import date, datetime
+from sqlalchemy import String, Numeric, Date, DateTime, func, Enum as PgEnum
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
-
 from app.db.base import Base
-
-
-class DriverStatus(str, enum.Enum):
-    available = "available"
-    on_trip = "on_trip"
-    off_duty = "off_duty"
-    suspended = "suspended"
-
+from app.models.enums import DriverStatus
 
 class Driver(Base):
     __tablename__ = "drivers"
 
-    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     full_name: Mapped[str] = mapped_column(String(100), nullable=False)
     license_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
     license_category: Mapped[str] = mapped_column(String(10), nullable=False)
-    license_expiry: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    license_expiry: Mapped[date] = mapped_column(Date, nullable=False)
     contact_number: Mapped[str] = mapped_column(String(20), nullable=False)
-    safety_score: Mapped[float] = mapped_column(Numeric(3, 1), default=10.0)
+    safety_score: Mapped[Decimal] = mapped_column(Numeric(3, 1), default=Decimal("10.0"), nullable=False)
     status: Mapped[DriverStatus] = mapped_column(
-        SAEnum(DriverStatus, name="driver_status", create_constraint=True),
-        default=DriverStatus.available,
+        PgEnum(DriverStatus, name="driver_status", create_type=False),
         nullable=False,
-        index=True,
+        default=DriverStatus.available
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+        DateTime(timezone=True), 
+        server_default=func.now(), 
+        onupdate=func.now(), 
+        nullable=False
     )
